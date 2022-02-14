@@ -1,6 +1,7 @@
 from europi import *
 from time import ticks_diff, ticks_ms, sleep_ms
 import uasyncio as asyncio
+from random import randint
 
 # Overclock the Pico for improved performance.
 machine.freq(250_000_000)
@@ -19,20 +20,26 @@ class burst:
         self.resetTimeout = 500
         self.previousTriggerTime = 0
         self.triggerDiffs = []
+        self.calculateBpm = False
+        self.analogInputMode = 1
+        self.probability = 0
+        self.minAnalogInputVoltage = 0.9
+        
         self.diff = 0
         # Bursts control params
-        self.numBursts = 5
-        self.burstWaitTimeMs = 25
+        self.numBursts = 3
+        self.burstWaitTimeMs = 33
 
         @din.handler
         def clockTrigger():
-            # Create an async task to output bursts
-            el.create_task(self.outputBurst(cv1, self.numBursts, self.burstWaitTimeMs))
-            el.create_task(self.outputBurst(cv2, self.numBursts, int(self.burstWaitTimeMs*2)))
-            el.create_task(self.outputBurst(cv3, self.numBursts, int(self.burstWaitTimeMs*4)))
+            if randint(0,99) < self.probability:
+                # Create async tasks to output bursts
+                el.create_task(self.outputBurst(cv1, self.numBursts, self.burstWaitTimeMs, False))
+                el.create_task(self.outputBurst(cv2, self.numBursts, int(self.burstWaitTimeMs*2), False))
+                el.create_task(self.outputBurst(cv3, self.numBursts, int(self.burstWaitTimeMs*4), True))
 
             # If we have more than one clock step, push the time diff between steps into self.triggerDiffs
-            if self.clockStep > 0:
+            if self.clockStep > 0 and self.calculateBpm:
                 # Get the time difference between the previous and current clock triggers
                 self.diff = ticks_diff(ticks_ms(), self.previousTriggerTime)
                 # Add the time difference to the array of differences
@@ -54,9 +61,11 @@ class burst:
         #def clockTriggerEnd():
         #    pass
 
-    async def outputBurst(self, cv, num, sleepTimeMs):
+    async def outputBurst(self, cv, num, sleepTimeMs, dropOff):
         for b in range (0, num):
             cv.voltage(1)
+            if dropOff:
+                sleepTimeMs += int(sleepTimeMs/1.67)
             await asyncio.sleep_ms(sleepTimeMs)
             cv.off()
 
@@ -83,6 +92,9 @@ class burst:
     async def main(self):
         while True:
             self.processAnalogueInput()
+            self.getProbability()
+            #self.getTimeBetweenBursts()
+            self.getNumBursts()
             self.updateScreen()
 
             # If I have been running, then stopped for longer than resetTimeout, reset clockStep to 0
@@ -98,8 +110,39 @@ class burst:
         #oled.clear() - dont use this, it causes the screen to flicker!
         oled.fill(0)
         oled.text('Input: ' + str(self.inputVoltage),0,0,1)
-        oled.text('BPM: ' + str(self.bpm),0,10,1)
+        if self.calculateBpm:
+            oled.text('BPM: ' + str(self.bpm),0,10,1)
+        # Show probability
+        oled.text('P' + str(int(self.probability)), 40, 25, 1)
+        # Show Time between bursts
+        #oled.text('T' + str(self.burstWaitTimeMs), 76, 25, 1)
+        oled.text('B' + str(self.numBursts), 76, 25, 1)
         oled.show()
+
+    def getProbability(self):
+        # If mode 1 and there is CV on the analogue input use it, if not use the knob position
+        val = 100 * ain.percent()
+        if self.analogInputMode == 2 and val > self.minAnalogInputVoltage:
+            self.probability = val
+        else:
+            self.probability = k1.read_position()
+
+    def getTimeBetweenBursts(self):
+        # If mode 1 and there is CV on the analogue input use it, if not use the knob position
+        val = 100 * ain.percent()
+        if self.analogInputMode == 3 and val > self.minAnalogInputVoltage:
+            self.burstWaitTimeMs = val * 3
+        else:
+            self.burstWaitTimeMs = k2.read_position() * 3
+
+    def getNumBursts(self):
+        # If mode 1 and there is CV on the analogue input use it, if not use the knob position
+        val = 100 * ain.percent()
+        if self.analogInputMode == 1 and val > self.minAnalogInputVoltage:
+            #self.CvPattern = int((len(self.random4) / 100) * CvpVal)
+            self.numBursts = int((6/100)*val)
+        else:
+            self.numBursts = k2.choice([1,2,3,4,5,6])
 
 # Create instance of the class
 me = burst()
